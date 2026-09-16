@@ -1,14 +1,18 @@
-FROM python:3.12-slim
+FROM python:3.12-bookworm
 
-# Install git (for cloning & GitPython) and Node.js (for JS syntax checking)
+# Install Git, Node.js, npm, Java JDK, and Maven
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     nodejs \
     npm \
+    openjdk-17-jdk \
+    maven \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Install TypeScript compiler globally
+RUN npm install -g typescript
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -18,7 +22,19 @@ COPY repo_prep_agent.py .
 COPY analysis_agent.py .
 COPY healing_agent.py .
 COPY git_agent.py .
+COPY language_detector.py .
 COPY worker_entrypoint.py .
 
+
+# Verify installed tools
+RUN python --version && \
+    git --version && \
+    node --version && \
+    npm --version && \
+    java --version && \
+    javac --version && \
+    mvn --version
+
 ENV PYTHONUNBUFFERED=1
+
 ENTRYPOINT ["python", "worker_entrypoint.py"]
