@@ -13,6 +13,7 @@ WORKDIR /app
 
 # Install TypeScript compiler globally
 RUN npm install -g typescript
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -23,8 +24,9 @@ COPY analysis_agent.py .
 COPY healing_agent.py .
 COPY git_agent.py .
 COPY language_detector.py .
+COPY failure_classifier.py .
+COPY failure_dataset.csv .
 COPY worker_entrypoint.py .
-
 
 # Verify installed tools
 RUN python --version && \
@@ -33,7 +35,8 @@ RUN python --version && \
     npm --version && \
     java --version && \
     javac --version && \
-    mvn --version
+    mvn --version && \
+    tsc --version
 
 ENV PYTHONUNBUFFERED=1
 

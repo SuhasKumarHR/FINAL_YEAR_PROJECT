@@ -1,0 +1,30 @@
+error_message,category
+"ModuleNotFoundError: No module named flask",IMPORT
+"ModuleNotFoundError: No module named numpy",IMPORT
+"ImportError: cannot import module",IMPORT
+"Cannot find module react",IMPORT
+"Cannot find module express",IMPORT
+"SyntaxError: invalid syntax",SYNTAX
+"SyntaxError: unexpected token",SYNTAX
+"invalid syntax at line",SYNTAX
+"unexpected token in JavaScript",SYNTAX
+"TypeError: unsupported operand type",TYPE_ERROR
+"TypeError: cannot read properties of undefined",TYPE_ERROR
+"TypeError: expected string but got integer",TYPE_ERROR
+"TypeError: object is not callable",TYPE_ERROR
+"javac compilation error",COMPILATION
+"cannot find symbol",COMPILATION
+"class not found during compilation",COMPILATION
+"compilation failed",COMPILATION
+"npm install failed",DEPENDENCY
+"dependency conflict",DEPENDENCY
+"package dependency could not be resolved",DEPENDENCY
+"pip install dependency failed",DEPENDENCY
+"npm run build failed",BUILD
+"build failed",BUILD
+"webpack compilation failed",BUILD
+"maven build failed",BUILD
+"test failed",TEST
+"pytest failed",TEST
+"unit test failure",TEST
+"npm test failed",TEST

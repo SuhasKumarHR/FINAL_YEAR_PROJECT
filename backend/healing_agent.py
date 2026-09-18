@@ -14,7 +14,6 @@ load_dotenv()
 class HealingAgent:
 
     def __init__(self, repo_path, analysis_result):
-
         self.repo_path = repo_path
         self.analysis_result = analysis_result
 
@@ -31,13 +30,15 @@ class HealingAgent:
 
         self.model_id = "gemini-3-flash-preview"
 
-
     # =========================================================
     # MAIN EXECUTION
     # =========================================================
 
-    def execute(self):
-
+    def execute(
+        self,
+        failure_category="UNKNOWN",
+        failure_confidence=0.0
+    ):
         print(
             "--- [AGENT START]: HealingAgent ---"
         )
@@ -58,20 +59,40 @@ class HealingAgent:
                 ""
             )
 
+            error_value = self.analysis_result.get(
+                "error",
+                ""
+            )
+
             error_text = (
                 str(stdout)
                 + "\n"
                 + str(stderr)
+                + "\n"
+                + str(error_value)
             )
 
             if not error_text.strip():
-
                 error_text = str(
                     self.analysis_result
                 )
 
             print(
                 "[INFO] Error logs received."
+            )
+
+            # -------------------------------------------------
+            # KNN CLASSIFICATION INFORMATION
+            # -------------------------------------------------
+
+            print(
+                f"[KNN] Failure Category: "
+                f"{failure_category}"
+            )
+
+            print(
+                f"[KNN] Confidence: "
+                f"{failure_confidence}"
             )
 
             # -------------------------------------------------
@@ -155,23 +176,42 @@ FILE: {file_path}
 You are an expert autonomous software debugging agent.
 
 Your task is to analyze a build, compilation, syntax,
-or runtime error and generate the minimum safe source-code
-fix required to resolve the problem.
+dependency, or runtime error and generate the minimum
+safe source-code fix required to resolve the problem.
 
 IMPORTANT RULES:
 
 1. Analyze the error logs carefully.
+
 2. Analyze the provided source code.
+
 3. Identify the actual root cause.
+
 4. Modify only the necessary source code.
+
 5. Do not rewrite the entire project.
+
 6. Do not invent files that were not provided.
+
 7. Do not change project architecture unnecessarily.
+
 8. Preserve existing functionality.
+
 9. Return COMPLETE corrected source code for each file.
+
 10. Return ONLY valid JSON.
+
 11. Do not use Markdown code fences.
+
 12. The file_path must be relative to the repository root.
+
+13. Do not modify configuration files unless the error
+    clearly requires a source-code change.
+
+14. Do not make unrelated improvements.
+
+15. Do not remove existing functionality just to make
+    the validation pass.
 
 SUPPORTED BUG TYPES:
 
@@ -182,11 +222,29 @@ SUPPORTED BUG TYPES:
 - LOGIC
 - TYPE_ERROR
 - COMPILATION
-
-ERROR LOGS:
+- DEPENDENCY
+- BUILD
+- TEST
 
 ==================================================
-ERROR LOG
+KNN FAILURE CLASSIFICATION
+==================================================
+
+Failure Category:
+{failure_category}
+
+KNN Confidence:
+{failure_confidence}
+
+The KNN classification is supporting information only.
+
+Verify the classification against the actual error logs,
+source code, and build output before generating the fix.
+
+Do not blindly trust the KNN classification.
+
+==================================================
+ERROR LOGS
 ==================================================
 
 {error_text}
@@ -223,11 +281,24 @@ Do not return partial code.
 Do not include Markdown.
 
 Do not include explanations outside JSON.
+
+==================================================
+FINAL INSTRUCTION
+==================================================
+
+First determine the actual root cause using the error logs
+and source code.
+
+Use the KNN failure category as supporting information.
+
+Generate only the minimum required repair.
+
+Return valid JSON only.
 """
 
             print(
-                "[INFO] Sending source code and "
-                "error logs to Gemini..."
+                "[INFO] Sending source code, error logs, "
+                "and KNN classification to Gemini..."
             )
 
             # -------------------------------------------------
@@ -278,26 +349,17 @@ Do not include explanations outside JSON.
             if raw_response.startswith(
                 "```json"
             ):
-
-                raw_response = (
-                    raw_response[7:]
-                )
+                raw_response = raw_response[7:]
 
             elif raw_response.startswith(
                 "```"
             ):
-
-                raw_response = (
-                    raw_response[3:]
-                )
+                raw_response = raw_response[3:]
 
             if raw_response.endswith(
                 "```"
             ):
-
-                raw_response = (
-                    raw_response[:-3]
-                )
+                raw_response = raw_response[:-3]
 
             raw_response = raw_response.strip()
 
@@ -437,7 +499,9 @@ Do not include explanations outside JSON.
                 "fixes": applied_fixes,
                 "fixes_count": len(
                     applied_fixes
-                )
+                ),
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
             }
 
         except Exception as e:
@@ -457,7 +521,6 @@ Do not include explanations outside JSON.
                 "status": "FAILED",
                 "error": error_message
             }
-
 
     # =========================================================
     # GEMINI API WITH RETRY
@@ -530,7 +593,6 @@ Do not include explanations outside JSON.
                 else:
 
                     raise
-
 
     # =========================================================
     # IDENTIFY FAILING FILES
@@ -654,7 +716,6 @@ Do not include explanations outside JSON.
 
         return unique_files
 
-
     # =========================================================
     # READ SOURCE FILE
     # =========================================================
@@ -719,7 +780,6 @@ Do not include explanations outside JSON.
                 return None
 
             if not full_path.is_file():
-
                 return None
 
             return full_path.read_text(
@@ -735,7 +795,6 @@ Do not include explanations outside JSON.
             )
 
             return None
-
 
     # =========================================================
     # NORMALIZE FILE PATH
@@ -804,11 +863,9 @@ Do not include explanations outside JSON.
                     return None
 
         except Exception:
-
             pass
 
         return path
-
 
     # =========================================================
     # VALIDATE GEMINI FIX
@@ -823,8 +880,7 @@ Do not include explanations outside JSON.
             "file_path",
             "bug_type",
             "description",
-            "fixed_code",
-            "commit_message"
+            "fixed_code"
         ]
 
         for field in required_fields:
@@ -838,6 +894,16 @@ Do not include explanations outside JSON.
 
                 return False
 
+        # commit_message is optional.
+        # Generate a default value if Gemini
+        # does not provide it.
+
+        fix.setdefault(
+            "commit_message",
+            f"fix: {fix['bug_type']} in "
+            f"{fix['file_path']}"
+        )
+
         allowed_bug_types = {
             "IMPORT",
             "LINTING",
@@ -845,7 +911,10 @@ Do not include explanations outside JSON.
             "SYNTAX",
             "LOGIC",
             "TYPE_ERROR",
-            "COMPILATION"
+            "COMPILATION",
+            "DEPENDENCY",
+            "BUILD",
+            "TEST"
         }
 
         bug_type = str(
@@ -888,7 +957,6 @@ Do not include explanations outside JSON.
             return False
 
         return True
-
 
     # =========================================================
     # APPLY GEMINI FIX
@@ -959,7 +1027,6 @@ Do not include explanations outside JSON.
                 return False
 
             if not target_path.is_file():
-
                 return False
 
             # -------------------------------------------------
@@ -1007,7 +1074,6 @@ Do not include explanations outside JSON.
             )
 
             return False
-
 
     # =========================================================
     # FORMAT GEMINI ERROR
