@@ -14,41 +14,87 @@ class AnalysisAgent:
     # =========================================================
 
     def execute(self):
+
         print("--- [AGENT START]: AnalysisAgent ---")
+
         print(
             f"[LOG] Analyzing environment: "
             f"{self.environment}"
         )
 
+        # -----------------------------------------------------
+        # FORMAL JAVASCRIPT / TYPESCRIPT PROJECT
+        # -----------------------------------------------------
+
         if (
-            ("javascript" in self.environment
-             or "typescript" in self.environment)
+            (
+                "javascript" in self.environment
+                or "typescript" in self.environment
+            )
             and "simple" not in self.environment
         ):
+
             result = self._check_js_build()
 
+        # -----------------------------------------------------
+        # FORMAL PYTHON PROJECT
+        # -----------------------------------------------------
+
         elif self.environment == "python":
-            result = self._check_python_compilation()
+
+            result = (
+                self._check_python_compilation()
+            )
+
+        # -----------------------------------------------------
+        # JAVA MAVEN / GRADLE
+        # -----------------------------------------------------
 
         elif self.environment in (
             "java (maven)",
             "java (gradle)"
         ):
+
             result = self._check_java_build()
 
+        # -----------------------------------------------------
+        # SIMPLE PYTHON
+        # -----------------------------------------------------
+
         elif self.environment == "python_simple":
+
             result = self._check_simple_python()
 
+        # -----------------------------------------------------
+        # SIMPLE JAVASCRIPT
+        # -----------------------------------------------------
+
         elif self.environment == "javascript_simple":
+
             result = self._check_simple_js()
 
+        # -----------------------------------------------------
+        # SIMPLE TYPESCRIPT
+        # -----------------------------------------------------
+
         elif self.environment == "typescript_simple":
+
             result = self._check_simple_ts()
 
+        # -----------------------------------------------------
+        # SIMPLE JAVA
+        # -----------------------------------------------------
+
         elif self.environment == "java":
+
             result = self._check_simple_java()
 
+        # -----------------------------------------------------
+        # UNKNOWN
+        # -----------------------------------------------------
+
         else:
+
             result = {
                 "status": "FAILED",
                 "error": (
@@ -64,6 +110,77 @@ class AnalysisAgent:
         return result
 
     # =========================================================
+    # FIND NODE PROJECT
+    # =========================================================
+
+    def _find_node_project(self):
+
+        # -----------------------------------------------------
+        # Check root package.json first
+        # -----------------------------------------------------
+
+        root_package = (
+            self.repo_path / "package.json"
+        )
+
+        if root_package.exists():
+
+            return self.repo_path
+
+        # -----------------------------------------------------
+        # Search nested package.json files
+        # -----------------------------------------------------
+
+        candidates = []
+
+        for package_file in self.repo_path.rglob(
+            "package.json"
+        ):
+
+            if not package_file.is_file():
+                continue
+
+            if "node_modules" in package_file.parts:
+                continue
+
+            if ".next" in package_file.parts:
+                continue
+
+            if "dist" in package_file.parts:
+                continue
+
+            if "build" in package_file.parts:
+                continue
+
+            candidates.append(
+                package_file.parent
+            )
+
+        if not candidates:
+            return None
+
+        # -----------------------------------------------------
+        # Prefer frontend
+        # -----------------------------------------------------
+
+        for candidate in candidates:
+
+            if candidate.name.lower() in (
+                "frontend",
+                "client",
+                "web",
+                "app"
+            ):
+
+                return candidate
+
+        # -----------------------------------------------------
+        # Otherwise use first project
+        # -----------------------------------------------------
+
+        return candidates[0]
+
+    # =========================================================
     # FORMAL JAVASCRIPT / TYPESCRIPT PROJECT
     # =========================================================
 
@@ -74,19 +191,100 @@ class AnalysisAgent:
             "project build..."
         )
 
-        package_json = self.repo_path / "package.json"
+        project_root = (
+            self._find_node_project()
+        )
 
-        if not package_json.exists():
+        if project_root is None:
 
             return {
                 "status": "FAILED",
-                "error": "package.json not found.",
+                "error": (
+                    "No package.json found "
+                    "in repository."
+                ),
                 "stdout": "",
                 "stderr": ""
             }
 
+        print(
+            f"[INFO] Node project detected at: "
+            f"{project_root}"
+        )
+
         # -----------------------------------------------------
-        # Prefer Bun if available
+        # Install dependencies if needed
+        # -----------------------------------------------------
+
+        node_modules = (
+            project_root / "node_modules"
+        )
+
+        if not node_modules.exists():
+
+            print(
+                "[INFO] Installing Node.js dependencies..."
+            )
+
+            try:
+
+                install_process = subprocess.run(
+                    [
+                        "npm",
+                        "install"
+                    ],
+                    cwd=str(project_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=180
+                )
+
+                if install_process.returncode != 0:
+
+                    print(
+                        "[ERROR] npm install failed."
+                    )
+
+                    return {
+                        "status": "FAILED",
+                        "error": (
+                            "npm dependency installation "
+                            "failed."
+                        ),
+                        "stdout": (
+                            install_process.stdout
+                        ),
+                        "stderr": (
+                            install_process.stderr
+                        )
+                    }
+
+                print(
+                    "[SUCCESS] npm install passed."
+                )
+
+            except subprocess.TimeoutExpired:
+
+                return {
+                    "status": "FAILED",
+                    "error": (
+                        "npm install timed out."
+                    ),
+                    "stdout": "",
+                    "stderr": ""
+                }
+
+            except Exception as e:
+
+                return {
+                    "status": "FAILED",
+                    "error": str(e),
+                    "stdout": "",
+                    "stderr": str(e)
+                }
+
+        # -----------------------------------------------------
+        # Determine package manager
         # -----------------------------------------------------
 
         if shutil.which("bun"):
@@ -105,11 +303,15 @@ class AnalysisAgent:
                 "build"
             ]
 
+        print(
+            "[INFO] Running project build..."
+        )
+
         try:
 
             process = subprocess.run(
                 command,
-                cwd=str(self.repo_path),
+                cwd=str(project_root),
                 capture_output=True,
                 text=True,
                 timeout=180
@@ -133,7 +335,9 @@ class AnalysisAgent:
 
             return {
                 "status": "FAILED",
-                "error": "Project build failed.",
+                "error": (
+                    "Project build failed."
+                ),
                 "stdout": process.stdout,
                 "stderr": process.stderr
             }
@@ -234,17 +438,6 @@ class AnalysisAgent:
     # =========================================================
 
     def _check_simple_python(self):
-        """
-        Validate a simple Python project.
-
-        Performs:
-        1. Python syntax/compilation check
-        2. Runtime execution of main.py
-
-        Runtime errors are returned with the complete
-        traceback so the HealingAgent can identify the
-        failing file.
-        """
 
         import py_compile
         import sys
@@ -253,13 +446,11 @@ class AnalysisAgent:
             "[INFO] Running simple Python validation..."
         )
 
-        # -----------------------------------------------------
-        # FIND PYTHON FILES
-        # -----------------------------------------------------
-
         python_files = []
 
-        for file_path in self.repo_path.rglob("*.py"):
+        for file_path in self.repo_path.rglob(
+            "*.py"
+        ):
 
             if not file_path.is_file():
                 continue
@@ -278,7 +469,9 @@ class AnalysisAgent:
             if "__pycache__" in parts:
                 continue
 
-            python_files.append(file_path)
+            python_files.append(
+                file_path
+            )
 
         if not python_files:
 
@@ -295,7 +488,7 @@ class AnalysisAgent:
         )
 
         # -----------------------------------------------------
-        # STEP 1 — SYNTAX CHECK
+        # Syntax
         # -----------------------------------------------------
 
         print(
@@ -332,10 +525,12 @@ class AnalysisAgent:
         )
 
         # -----------------------------------------------------
-        # STEP 2 — FIND MAIN.PY
+        # Find main.py
         # -----------------------------------------------------
 
-        main_file = self.repo_path / "main.py"
+        main_file = (
+            self.repo_path / "main.py"
+        )
 
         if not main_file.exists():
 
@@ -356,7 +551,7 @@ class AnalysisAgent:
             }
 
         # -----------------------------------------------------
-        # STEP 3 — EXECUTE MAIN.PY
+        # Execute main.py
         # -----------------------------------------------------
 
         print(
@@ -397,10 +592,6 @@ class AnalysisAgent:
 
         except Exception as e:
 
-            print(
-                f"[ERROR] Could not execute main.py: {e}"
-            )
-
             return {
                 "status": "FAILED",
                 "error": str(e),
@@ -408,18 +599,10 @@ class AnalysisAgent:
                 "stderr": str(e)
             }
 
-        # -----------------------------------------------------
-        # STEP 4 — CHECK RUNTIME RESULT
-        # -----------------------------------------------------
-
         if process.returncode != 0:
 
             print(
                 "[ERROR] Python runtime error detected."
-            )
-
-            print(
-                "[ERROR] stderr:"
             )
 
             print(
@@ -435,10 +618,6 @@ class AnalysisAgent:
                 "stderr": process.stderr
             }
 
-        # -----------------------------------------------------
-        # SUCCESS
-        # -----------------------------------------------------
-
         print(
             "[SUCCESS] main.py executed successfully."
         )
@@ -450,7 +629,7 @@ class AnalysisAgent:
         }
 
     # =========================================================
-    # SIMPLE JAVASCRIPT PROJECT
+    # SIMPLE JAVASCRIPT
     # =========================================================
 
     def _check_simple_js(self):
@@ -461,7 +640,10 @@ class AnalysisAgent:
 
         js_files = []
 
-        for extension in ["*.js", "*.jsx"]:
+        for extension in (
+            "*.js",
+            "*.jsx"
+        ):
 
             for file_path in self.repo_path.rglob(
                 extension
@@ -484,7 +666,9 @@ class AnalysisAgent:
                 if "build" in parts:
                     continue
 
-                js_files.append(file_path)
+                js_files.append(
+                    file_path
+                )
 
         if not js_files:
 
@@ -550,7 +734,7 @@ class AnalysisAgent:
         }
 
     # =========================================================
-    # SIMPLE TYPESCRIPT PROJECT
+    # SIMPLE TYPESCRIPT
     # =========================================================
 
     def _check_simple_ts(self):
@@ -573,7 +757,10 @@ class AnalysisAgent:
 
         ts_files = []
 
-        for extension in ["*.ts", "*.tsx"]:
+        for extension in (
+            "*.ts",
+            "*.tsx"
+        ):
 
             for file_path in self.repo_path.rglob(
                 extension
@@ -601,7 +788,9 @@ class AnalysisAgent:
                 ):
                     continue
 
-                ts_files.append(file_path)
+                ts_files.append(
+                    file_path
+                )
 
         if not ts_files:
 
@@ -666,7 +855,7 @@ class AnalysisAgent:
         }
 
     # =========================================================
-    # JAVA BUILD PROJECT
+    # JAVA BUILD
     # =========================================================
 
     def _check_java_build(self):
@@ -689,10 +878,6 @@ class AnalysisAgent:
 
         try:
 
-            # -------------------------------------------------
-            # MAVEN
-            # -------------------------------------------------
-
             if pom_file.exists():
 
                 print(
@@ -709,10 +894,6 @@ class AnalysisAgent:
                     text=True,
                     timeout=180
                 )
-
-            # -------------------------------------------------
-            # GRADLE
-            # -------------------------------------------------
 
             elif (
                 gradle_file.exists()
@@ -760,10 +941,6 @@ class AnalysisAgent:
                     text=True,
                     timeout=180
                 )
-
-            # -------------------------------------------------
-            # RAW JAVA
-            # -------------------------------------------------
 
             else:
 
@@ -813,7 +990,7 @@ class AnalysisAgent:
             }
 
     # =========================================================
-    # SIMPLE JAVA PROJECT
+    # SIMPLE JAVA
     # =========================================================
 
     def _check_simple_java(self):
@@ -854,7 +1031,9 @@ class AnalysisAgent:
             if "build" in parts:
                 continue
 
-            java_files.append(file_path)
+            java_files.append(
+                file_path
+            )
 
         if not java_files:
 

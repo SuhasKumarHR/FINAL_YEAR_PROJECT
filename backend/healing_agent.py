@@ -4,31 +4,44 @@ import re
 import time
 from pathlib import Path
 
-from google import genai
 from dotenv import load_dotenv
+from google import genai
 
 
 load_dotenv()
 
 
 class HealingAgent:
+    """
+    Agent 3: Autonomous Healing Agent
+
+    Responsibilities:
+    1. Receive CI/CD error information.
+    2. Receive KNN failure classification.
+    3. Identify actual source files responsible for the error.
+    4. Read source code.
+    5. Ask Gemini to generate a repair.
+    6. Validate Gemini response.
+    7. Apply the corrected source code.
+    8. Preserve backups of original files.
+    """
 
     def __init__(self, repo_path, analysis_result):
-        self.repo_path = repo_path
+        self.repo_path = str(repo_path)
         self.analysis_result = analysis_result
 
         self.api_key = os.getenv("GEMINI_API_KEY")
 
         if not self.api_key:
             raise ValueError(
-                "GEMINI_API_KEY environment variable is missing."
+                "GEMINI_API_KEY is not configured."
             )
 
         self.client = genai.Client(
             api_key=self.api_key
         )
 
-        self.model_id = "gemini-3-flash-preview"
+        self.model_name = "gemini-3-flash-preview"
 
     # =========================================================
     # MAIN EXECUTION
@@ -39,569 +52,397 @@ class HealingAgent:
         failure_category="UNKNOWN",
         failure_confidence=0.0
     ):
+        print("--- [AGENT START]: HealingAgent ---")
+
         print(
-            "--- [AGENT START]: HealingAgent ---"
+            "[INFO] Error logs received."
         )
 
-        try:
+        print(
+            f"[KNN] Failure Category: "
+            f"{failure_category}"
+        )
 
-            # -------------------------------------------------
-            # GET ANALYSIS OUTPUT
-            # -------------------------------------------------
+        print(
+            f"[KNN] Confidence: "
+            f"{failure_confidence}"
+        )
 
-            stdout = self.analysis_result.get(
-                "stdout",
-                ""
-            )
-
-            stderr = self.analysis_result.get(
+        stderr = str(
+            self.analysis_result.get(
                 "stderr",
                 ""
             )
+        )
 
-            error_value = self.analysis_result.get(
+        stdout = str(
+            self.analysis_result.get(
+                "stdout",
+                ""
+            )
+        )
+
+        error = str(
+            self.analysis_result.get(
                 "error",
                 ""
             )
+        )
 
-            error_text = (
-                str(stdout)
-                + "\n"
-                + str(stderr)
-                + "\n"
-                + str(error_value)
+        combined_error = (
+            stderr
+            + "\n"
+            + stdout
+            + "\n"
+            + error
+        )
+
+        # -----------------------------------------------------
+        # IDENTIFY FAILING FILES
+        # -----------------------------------------------------
+
+        failing_files = (
+            self._identify_files_from_stderr(
+                combined_error
             )
+        )
 
-            if not error_text.strip():
-                error_text = str(
-                    self.analysis_result
-                )
+        print(
+            f"[INFO] Detected failing files: "
+            f"{failing_files}"
+        )
+
+        if not failing_files:
 
             print(
-                "[INFO] Error logs received."
-            )
-
-            # -------------------------------------------------
-            # KNN CLASSIFICATION INFORMATION
-            # -------------------------------------------------
-
-            print(
-                f"[KNN] Failure Category: "
-                f"{failure_category}"
-            )
-
-            print(
-                f"[KNN] Confidence: "
-                f"{failure_confidence}"
-            )
-
-            # -------------------------------------------------
-            # FIND FAILING FILES
-            # -------------------------------------------------
-
-            failing_files = (
-                self._identify_files_from_stderr(
-                    error_text
-                )
-            )
-
-            print(
-                f"[INFO] Detected failing files: "
-                f"{failing_files}"
-            )
-
-            # -------------------------------------------------
-            # BUILD SOURCE CONTEXT
-            # -------------------------------------------------
-
-            file_context = []
-
-            for file_path in failing_files:
-
-                source_code = (
-                    self._read_file_content(
-                        file_path
-                    )
-                )
-
-                if source_code is not None:
-
-                    # Prevent extremely large prompts
-                    if len(source_code) > 20000:
-
-                        source_code = (
-                            source_code[:20000]
-                            + "\n\n[FILE TRUNCATED]"
-                        )
-
-                    file_context.append(
-                        f"""
-==================================================
-FILE: {file_path}
-==================================================
-
-{source_code}
-"""
-                    )
-
-            # -------------------------------------------------
-            # IF NO FILE WAS IDENTIFIED
-            # -------------------------------------------------
-
-            if not file_context:
-
-                print(
-                    "[WARN] No source files could "
-                    "be identified from the error."
-                )
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Could not identify the "
-                        "source file responsible "
-                        "for the error."
-                    )
-                }
-
-            source_context = "\n".join(
-                file_context
-            )
-
-            # -------------------------------------------------
-            # GEMINI PROMPT
-            # -------------------------------------------------
-
-            prompt = f"""
-You are an expert autonomous software debugging agent.
-
-Your task is to analyze a build, compilation, syntax,
-dependency, or runtime error and generate the minimum
-safe source-code fix required to resolve the problem.
-
-IMPORTANT RULES:
-
-1. Analyze the error logs carefully.
-
-2. Analyze the provided source code.
-
-3. Identify the actual root cause.
-
-4. Modify only the necessary source code.
-
-5. Do not rewrite the entire project.
-
-6. Do not invent files that were not provided.
-
-7. Do not change project architecture unnecessarily.
-
-8. Preserve existing functionality.
-
-9. Return COMPLETE corrected source code for each file.
-
-10. Return ONLY valid JSON.
-
-11. Do not use Markdown code fences.
-
-12. The file_path must be relative to the repository root.
-
-13. Do not modify configuration files unless the error
-    clearly requires a source-code change.
-
-14. Do not make unrelated improvements.
-
-15. Do not remove existing functionality just to make
-    the validation pass.
-
-SUPPORTED BUG TYPES:
-
-- IMPORT
-- LINTING
-- INDENTATION
-- SYNTAX
-- LOGIC
-- TYPE_ERROR
-- COMPILATION
-- DEPENDENCY
-- BUILD
-- TEST
-
-==================================================
-KNN FAILURE CLASSIFICATION
-==================================================
-
-Failure Category:
-{failure_category}
-
-KNN Confidence:
-{failure_confidence}
-
-The KNN classification is supporting information only.
-
-Verify the classification against the actual error logs,
-source code, and build output before generating the fix.
-
-Do not blindly trust the KNN classification.
-
-==================================================
-ERROR LOGS
-==================================================
-
-{error_text}
-
-==================================================
-SOURCE FILES
-==================================================
-
-{source_context}
-
-==================================================
-REQUIRED JSON FORMAT
-==================================================
-
-Return either a JSON object or JSON array.
-
-Example:
-
-[
-    {{
-        "file_path": "src/example.py",
-        "bug_type": "SYNTAX",
-        "description": "Description of the problem",
-        "fixed_code": "complete corrected source code",
-        "commit_message": "fix: correct syntax error"
-    }}
-]
-
-The fixed_code field MUST contain the COMPLETE corrected
-source code of the file.
-
-Do not return partial code.
-
-Do not include Markdown.
-
-Do not include explanations outside JSON.
-
-==================================================
-FINAL INSTRUCTION
-==================================================
-
-First determine the actual root cause using the error logs
-and source code.
-
-Use the KNN failure category as supporting information.
-
-Generate only the minimum required repair.
-
-Return valid JSON only.
-"""
-
-            print(
-                "[INFO] Sending source code, error logs, "
-                "and KNN classification to Gemini..."
-            )
-
-            # -------------------------------------------------
-            # GEMINI REQUEST
-            # -------------------------------------------------
-
-            response = self._generate_gemini_response(
-                prompt
-            )
-
-            # -------------------------------------------------
-            # CHECK RESPONSE
-            # -------------------------------------------------
-
-            if not response:
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Gemini returned no response."
-                    )
-                }
-
-            if not hasattr(response, "text"):
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Gemini response has no text."
-                    )
-                }
-
-            if not response.text:
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Gemini returned an empty response."
-                    )
-                }
-
-            raw_response = response.text.strip()
-
-            # -------------------------------------------------
-            # REMOVE MARKDOWN FENCES
-            # -------------------------------------------------
-
-            if raw_response.startswith(
-                "```json"
-            ):
-                raw_response = raw_response[7:]
-
-            elif raw_response.startswith(
-                "```"
-            ):
-                raw_response = raw_response[3:]
-
-            if raw_response.endswith(
-                "```"
-            ):
-                raw_response = raw_response[:-3]
-
-            raw_response = raw_response.strip()
-
-            # -------------------------------------------------
-            # PARSE JSON
-            # -------------------------------------------------
-
-            try:
-
-                fix_details = json.loads(
-                    raw_response
-                )
-
-            except json.JSONDecodeError as e:
-
-                print(
-                    "[ERROR] Gemini returned "
-                    "invalid JSON."
-                )
-
-                print(
-                    f"[ERROR] JSON error: {e}"
-                )
-
-                print(
-                    "[DEBUG] Gemini response:"
-                )
-
-                print(
-                    raw_response
-                )
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Gemini returned invalid JSON."
-                    )
-                }
-
-            # -------------------------------------------------
-            # NORMALIZE RESPONSE
-            # -------------------------------------------------
-
-            if isinstance(
-                fix_details,
-                dict
-            ):
-
-                fixes = [
-                    fix_details
-                ]
-
-            elif isinstance(
-                fix_details,
-                list
-            ):
-
-                fixes = fix_details
-
-            else:
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Invalid Gemini response "
-                        "format."
-                    )
-                }
-
-            # -------------------------------------------------
-            # APPLY FIXES
-            # -------------------------------------------------
-
-            applied_fixes = []
-
-            for fix in fixes:
-
-                if not isinstance(
-                    fix,
-                    dict
-                ):
-
-                    print(
-                        "[WARN] Gemini returned "
-                        "an invalid fix object."
-                    )
-
-                    continue
-
-                if not self._validate_fix_format(
-                    fix
-                ):
-
-                    print(
-                        "[WARN] Invalid fix format. "
-                        "Skipping."
-                    )
-
-                    continue
-
-                success = self._apply_fix(
-                    fix
-                )
-
-                if success:
-
-                    applied_fixes.append(
-                        fix
-                    )
-
-            # -------------------------------------------------
-            # FINAL RESULT
-            # -------------------------------------------------
-
-            if not applied_fixes:
-
-                return {
-                    "status": "FAILED",
-                    "error": (
-                        "Gemini generated no "
-                        "valid applicable fixes."
-                    )
-                }
-
-            print(
-                f"[SUCCESS] Applied "
-                f"{len(applied_fixes)} fix(es)."
-            )
-
-            print(
-                "--- [AGENT COMPLETED]: "
-                "HealingAgent ---"
-            )
-
-            return {
-                "status": "SUCCESS",
-                "fixes": applied_fixes,
-                "fixes_count": len(
-                    applied_fixes
-                ),
-                "failure_category": failure_category,
-                "failure_confidence": failure_confidence
-            }
-
-        except Exception as e:
-
-            error_message = (
-                self._format_gemini_error(
-                    str(e)
-                )
-            )
-
-            print(
-                f"[ERROR] Gemini Healing failed: "
-                f"{error_message}"
+                "[WARN] No source files could be "
+                "identified from the error."
             )
 
             return {
                 "status": "FAILED",
-                "error": error_message
+                "error": (
+                    "Could not identify the source "
+                    "file responsible for the error."
+                ),
+                "fixes": [],
+                "fixes_count": 0,
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
             }
 
-    # =========================================================
-    # GEMINI API WITH RETRY
-    # =========================================================
+        # -----------------------------------------------------
+        # READ SOURCE FILES
+        # -----------------------------------------------------
 
-    def _generate_gemini_response(
-        self,
-        prompt
-    ):
+        source_files = {}
 
-        max_attempts = 3
+        for file_path in failing_files:
 
-        for attempt in range(
-            1,
-            max_attempts + 1
-        ):
-
-            print(
-                f"[INFO] Gemini API attempt "
-                f"{attempt}/{max_attempts}..."
+            content = (
+                self._read_file_content(
+                    file_path
+                )
             )
 
-            try:
+            if content is not None:
 
-                # IMPORTANT:
-                # This calls Gemini API directly.
-                # It MUST NOT call this function again.
-
-                response = (
-                    self.client.models.generate_content(
-                        model=self.model_id,
-                        contents=prompt,
-                        config={
-                            "response_mime_type":
-                                "application/json"
-                        }
+                relative_path = (
+                    self._normalize_relative_path(
+                        file_path
                     )
                 )
 
-                print(
-                    f"[SUCCESS] Gemini API response "
-                    f"received on attempt {attempt}."
+                if relative_path:
+
+                    source_files[
+                        relative_path
+                    ] = content
+
+        if not source_files:
+
+            print(
+                "[ERROR] Could not read any "
+                "identified source files."
+            )
+
+            return {
+                "status": "FAILED",
+                "error": (
+                    "Could not read the identified "
+                    "source files."
+                ),
+                "fixes": [],
+                "fixes_count": 0,
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
+            }
+
+        # -----------------------------------------------------
+        # GENERATE GEMINI PROMPT
+        # -----------------------------------------------------
+
+        prompt = self._build_prompt(
+            combined_error,
+            source_files,
+            failure_category,
+            failure_confidence
+        )
+
+        # -----------------------------------------------------
+        # CALL GEMINI
+        # -----------------------------------------------------
+
+        response_data = (
+            self._call_gemini(
+                prompt
+            )
+        )
+
+        if response_data is None:
+
+            return {
+                "status": "FAILED",
+                "error": (
+                    "Gemini returned invalid JSON."
+                ),
+                "fixes": [],
+                "fixes_count": 0,
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
+            }
+
+        # -----------------------------------------------------
+        # NORMALIZE RESPONSE
+        # -----------------------------------------------------
+
+        fixes = self._normalize_fixes(
+            response_data
+        )
+
+        if not fixes:
+
+            print(
+                "[ERROR] Gemini did not provide "
+                "any valid fixes."
+            )
+
+            return {
+                "status": "FAILED",
+                "error": (
+                    "Gemini did not provide "
+                    "any valid fixes."
+                ),
+                "fixes": [],
+                "fixes_count": 0,
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
+            }
+
+        # -----------------------------------------------------
+        # APPLY FIXES
+        # -----------------------------------------------------
+
+        applied_fixes = []
+
+        for fix in fixes:
+
+            if not self._validate_fix_format(
+                fix
+            ):
+                continue
+
+            relative_path = (
+                self._normalize_relative_path(
+                    fix["file_path"]
+                )
+            )
+
+            if not relative_path:
+                continue
+
+            fix["file_path"] = relative_path
+
+            success = self._apply_fix(
+                fix
+            )
+
+            if success:
+
+                applied_fixes.append(
+                    fix
                 )
 
-                return response
+        if not applied_fixes:
 
-            except Exception as e:
+            print(
+                "[ERROR] No Gemini fixes "
+                "could be applied."
+            )
 
-                error_message = str(e)
+            return {
+                "status": "FAILED",
+                "error": (
+                    "No Gemini fixes could "
+                    "be applied."
+                ),
+                "fixes": [],
+                "fixes_count": 0,
+                "failure_category": failure_category,
+                "failure_confidence": failure_confidence
+            }
 
-                print(
-                    f"[WARN] Gemini API attempt "
-                    f"{attempt} failed: "
-                    f"{error_message}"
-                )
+        print(
+            f"[SUCCESS] Applied "
+            f"{len(applied_fixes)} fix(es)."
+        )
 
-                if attempt < max_attempts:
+        print(
+            "--- [AGENT COMPLETED] ---"
+        )
 
-                    wait_time = attempt * 2
-
-                    print(
-                        f"[INFO] Retrying Gemini API "
-                        f"in {wait_time} seconds..."
-                    )
-
-                    time.sleep(
-                        wait_time
-                    )
-
-                else:
-
-                    raise
+        return {
+            "status": "SUCCESS",
+            "fixes": applied_fixes,
+            "fixes_count": len(
+                applied_fixes
+            ),
+            "failure_category": failure_category,
+            "failure_confidence": failure_confidence
+        }
 
     # =========================================================
-    # IDENTIFY FAILING FILES
+    # BUILD GEMINI PROMPT
+    # =========================================================
+
+    def _build_prompt(
+        self,
+        error_log,
+        source_files,
+        failure_category,
+        failure_confidence
+    ):
+
+        source_text = ""
+
+        for path, content in source_files.items():
+
+            source_text += (
+                "\n\n"
+                + "=" * 60
+                + "\n"
+                + f"FILE: {path}\n"
+                + "=" * 60
+                + "\n"
+                + content
+            )
+
+        prompt = f"""
+You are an autonomous software repair agent.
+
+Analyze the CI/CD failure and repair the source code.
+
+The system uses KNN for failure classification.
+
+Gemini is responsible for source-code analysis
+and generating the repair.
+
+KNN failure category:
+
+{failure_category}
+
+KNN confidence:
+
+{failure_confidence}
+
+IMPORTANT:
+
+The KNN category is supporting information.
+
+You must independently inspect the error and source code.
+
+CI/CD ERROR LOG:
+
+{error_log}
+
+SOURCE FILES:
+
+{source_text}
+
+Return ONLY valid JSON.
+
+The response must contain a JSON array.
+
+Each fix must contain:
+
+{{
+    "file_path": "repository-relative/path",
+    "bug_type": "TYPE_ERROR",
+    "description": "short explanation",
+    "fixed_code": "complete corrected source code",
+    "commit_message": "fix: short commit message"
+}}
+
+Allowed bug_type values:
+
+IMPORT
+LINTING
+INDENTATION
+SYNTAX
+LOGIC
+TYPE_ERROR
+COMPILATION
+DEPENDENCY
+BUILD
+TEST
+
+IMPORTANT RULES:
+
+1. file_path must be repository-relative.
+
+2. Do not use /app/temp/ or other Docker paths.
+
+3. Only modify files that actually exist.
+
+4. fixed_code must contain the complete corrected file.
+
+5. Preserve the existing functionality.
+
+6. Do not invent files.
+
+7. Do not include Markdown.
+
+8. Do not include ```json.
+
+9. Return valid JSON only.
+
+10. Escape all quotation marks and newlines correctly.
+
+"""
+
+        return prompt
+
+    # =========================================================
+    # IDENTIFY FILES FROM ERROR
     # =========================================================
 
     def _identify_files_from_stderr(
         self,
         stderr
     ):
+        """
+        Identify actual source files mentioned in an error log.
+
+        The detected path is accepted only when the corresponding
+        file actually exists inside the cloned repository.
+
+        This prevents words such as:
+
+            Node.js
+            Next.js
+
+        from being incorrectly treated as source files.
+        """
 
         files = []
 
@@ -612,8 +453,10 @@ Return valid JSON only.
 
         # -----------------------------------------------------
         # Python traceback
+        #
         # Example:
-        # File "src/main.py", line 10
+        #
+        # File "/app/temp/main.py", line 10
         # -----------------------------------------------------
 
         python_matches = re.findall(
@@ -627,7 +470,9 @@ Return valid JSON only.
 
         # -----------------------------------------------------
         # Custom error format
+        #
         # Example:
+        #
         # Error in src/main.py:
         # -----------------------------------------------------
 
@@ -642,7 +487,9 @@ Return valid JSON only.
 
         # -----------------------------------------------------
         # Java compiler
+        #
         # Example:
+        #
         # Main.java:12: error:
         # -----------------------------------------------------
 
@@ -657,8 +504,10 @@ Return valid JSON only.
 
         # -----------------------------------------------------
         # Maven Java
+        #
         # Example:
-        # /src/Main.java:[12,5]
+        #
+        # /app/temp/src/Main.java:[12,5]
         # -----------------------------------------------------
 
         maven_matches = re.findall(
@@ -672,7 +521,9 @@ Return valid JSON only.
 
         # -----------------------------------------------------
         # JavaScript / TypeScript
+        #
         # Examples:
+        #
         # frontend/app/page.tsx:10:5
         # src/index.js:12:4
         # -----------------------------------------------------
@@ -687,10 +538,37 @@ Return valid JSON only.
         )
 
         # -----------------------------------------------------
-        # Remove duplicates
+        # Standalone source paths
+        #
+        # IMPORTANT:
+        # These are only candidates.
+        #
+        # They are later checked against the actual
+        # repository filesystem.
+        # -----------------------------------------------------
+
+        standalone_matches = re.findall(
+            r'(?<![\w.-])'
+            r'([A-Za-z0-9_./\\-]+'
+            r'\.(?:js|jsx|ts|tsx|py|java))'
+            r'(?![\w.-])',
+            text
+        )
+
+        files.extend(
+            standalone_matches
+        )
+
+        # -----------------------------------------------------
+        # NORMALIZE + VALIDATE
         # -----------------------------------------------------
 
         unique_files = []
+
+        repo_root = (
+            Path(self.repo_path)
+            .resolve()
+        )
 
         for file_path in files:
 
@@ -701,17 +579,85 @@ Return valid JSON only.
             if not file_path:
                 continue
 
-            # Remove surrounding quotes
             file_path = (
                 file_path
                 .strip('"')
                 .strip("'")
             )
 
-            if file_path not in unique_files:
+            # Convert Windows separators
+            file_path = file_path.replace(
+                "\\",
+                "/"
+            )
+
+            # Remove ./ prefix
+            while file_path.startswith(
+                "./"
+            ):
+                file_path = file_path[2:]
+
+            # -------------------------------------------------
+            # NORMALIZE DOCKER / ABSOLUTE PATH
+            # -------------------------------------------------
+
+            relative_path = (
+                self._normalize_relative_path(
+                    file_path
+                )
+            )
+
+            if not relative_path:
+                continue
+
+            # -------------------------------------------------
+            # SECURITY CHECK
+            # -------------------------------------------------
+
+            candidate_path = (
+                repo_root
+                / relative_path
+            ).resolve()
+
+            try:
+
+                candidate_path.relative_to(
+                    repo_root
+                )
+
+            except ValueError:
+
+                continue
+
+            # -------------------------------------------------
+            # CRITICAL VALIDATION
+            #
+            # Only accept the path if it is an actual file.
+            #
+            # This prevents:
+            #
+            # Node.js
+            # Next.js
+            #
+            # from being treated as files.
+            # -------------------------------------------------
+
+            if not candidate_path.exists():
+
+                continue
+
+            if not candidate_path.is_file():
+
+                continue
+
+            # -------------------------------------------------
+            # REMOVE DUPLICATES
+            # -------------------------------------------------
+
+            if relative_path not in unique_files:
 
                 unique_files.append(
-                    file_path
+                    relative_path
                 )
 
         return unique_files
@@ -747,13 +693,12 @@ Return valid JSON only.
             )
 
             full_path = (
-                full_path
-                .resolve()
+                full_path.resolve()
             )
 
-            # Security check:
-            # Do not allow Gemini/error logs to
-            # access files outside repository.
+            # -------------------------------------------------
+            # SECURITY CHECK
+            # -------------------------------------------------
 
             try:
 
@@ -770,6 +715,10 @@ Return valid JSON only.
 
                 return None
 
+            # -------------------------------------------------
+            # FILE EXISTENCE
+            # -------------------------------------------------
+
             if not full_path.exists():
 
                 print(
@@ -780,7 +729,12 @@ Return valid JSON only.
                 return None
 
             if not full_path.is_file():
+
                 return None
+
+            # -------------------------------------------------
+            # READ FILE
+            # -------------------------------------------------
 
             return full_path.read_text(
                 encoding="utf-8",
@@ -831,8 +785,9 @@ Return valid JSON only.
 
             path = path[2:]
 
-        # If absolute path points inside repo,
-        # convert it to repository-relative path.
+        # -----------------------------------------------------
+        # ABSOLUTE PATH
+        # -----------------------------------------------------
 
         try:
 
@@ -848,22 +803,63 @@ Return valid JSON only.
                 )
 
                 candidate = (
-                    candidate
-                    .resolve()
+                    candidate.resolve()
                 )
 
                 try:
 
-                    return candidate.relative_to(
-                        repo_root
-                    ).as_posix()
+                    relative = (
+                        candidate.relative_to(
+                            repo_root
+                        )
+                    )
+
+                    return relative.as_posix()
 
                 except ValueError:
+
+                    normalized = (
+                        path.replace(
+                            "\\",
+                            "/"
+                        )
+                    )
+
+                    if "/temp/" in normalized:
+
+                        return (
+                            normalized.split(
+                                "/temp/",
+                                1
+                            )[1]
+                        )
 
                     return None
 
         except Exception:
+
             pass
+
+        # -----------------------------------------------------
+        # REMOVE COMMON DOCKER REPOSITORY PREFIXES
+        # -----------------------------------------------------
+
+        prefixes = [
+            "/app/temp/",
+            "app/temp/",
+            "/workspace/",
+            "workspace/"
+        ]
+
+        for prefix in prefixes:
+
+            if path.startswith(prefix):
+
+                path = path[
+                    len(prefix):
+                ]
+
+                break
 
         return path
 
@@ -894,15 +890,19 @@ Return valid JSON only.
 
                 return False
 
-        # commit_message is optional.
-        # Generate a default value if Gemini
-        # does not provide it.
+        # -----------------------------------------------------
+        # COMMIT MESSAGE IS OPTIONAL
+        # -----------------------------------------------------
 
         fix.setdefault(
             "commit_message",
-            f"fix: {fix['bug_type']} in "
-            f"{fix['file_path']}"
+            f"fix: {fix['bug_type']} "
+            f"in {fix['file_path']}"
         )
+
+        # -----------------------------------------------------
+        # ALLOWED BUG TYPES
+        # -----------------------------------------------------
 
         allowed_bug_types = {
             "IMPORT",
@@ -930,6 +930,12 @@ Return valid JSON only.
 
             return False
 
+        fix["bug_type"] = bug_type
+
+        # -----------------------------------------------------
+        # FIXED CODE VALIDATION
+        # -----------------------------------------------------
+
         if not isinstance(
             fix["fixed_code"],
             str
@@ -942,13 +948,19 @@ Return valid JSON only.
 
             return False
 
-        if not fix["fixed_code"].strip():
+        if not fix[
+            "fixed_code"
+        ].strip():
 
             print(
                 "[WARN] fixed_code is empty."
             )
 
             return False
+
+        # -----------------------------------------------------
+        # FILE PATH VALIDATION
+        # -----------------------------------------------------
 
         if not str(
             fix["file_path"]
@@ -957,6 +969,328 @@ Return valid JSON only.
             return False
 
         return True
+
+    # =========================================================
+    # NORMALIZE GEMINI RESPONSE
+    # =========================================================
+
+    def _normalize_fixes(
+        self,
+        response_data
+    ):
+
+        if isinstance(
+            response_data,
+            dict
+        ):
+
+            if "fixes" in response_data:
+
+                response_data = (
+                    response_data["fixes"]
+                )
+
+            else:
+
+                response_data = [
+                    response_data
+                ]
+
+        if not isinstance(
+            response_data,
+            list
+        ):
+
+            return []
+
+        valid_fixes = []
+
+        for fix in response_data:
+
+            if not isinstance(
+                fix,
+                dict
+            ):
+
+                continue
+
+            valid_fixes.append(
+                fix
+            )
+
+        return valid_fixes
+
+    # =========================================================
+    # GEMINI API
+    # =========================================================
+
+    def _call_gemini(
+        self,
+        prompt
+    ):
+
+        max_attempts = 3
+
+        for attempt in range(
+            1,
+            max_attempts + 1
+        ):
+
+            try:
+
+                print(
+                    f"[INFO] Gemini API "
+                    f"attempt {attempt}/"
+                    f"{max_attempts}..."
+                )
+
+                response = (
+                    self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config={
+                            "temperature": 0.1,
+                            "response_mime_type":
+                                "application/json"
+                        }
+                    )
+                )
+
+                text = (
+                    response.text
+                    if response
+                    else ""
+                )
+
+                if not text:
+
+                    raise ValueError(
+                        "Gemini returned "
+                        "an empty response."
+                    )
+
+                parsed = (
+                    self._parse_gemini_json(
+                        text
+                    )
+                )
+
+                if parsed is not None:
+
+                    print(
+                        "[SUCCESS] Gemini response "
+                        "parsed successfully."
+                    )
+
+                    return parsed
+
+                print(
+                    "[WARN] Gemini returned "
+                    "invalid JSON."
+                )
+
+            except Exception as e:
+
+                formatted_error = (
+                    self._format_gemini_error(
+                        e
+                    )
+                )
+
+                print(
+                    f"[WARN] Gemini attempt "
+                    f"{attempt} failed: "
+                    f"{formatted_error}"
+                )
+
+            if attempt < max_attempts:
+
+                time.sleep(
+                    2 * attempt
+                )
+
+        print(
+            "[ERROR] Gemini healing failed "
+            "after all attempts."
+        )
+
+        return None
+
+    # =========================================================
+    # ROBUST GEMINI JSON PARSER
+    # =========================================================
+
+    def _parse_gemini_json(
+        self,
+        text
+    ):
+
+        if not text:
+            return None
+
+        text = str(
+            text
+        ).strip()
+
+        # -----------------------------------------------------
+        # ATTEMPT 1: DIRECT JSON
+        # -----------------------------------------------------
+
+        try:
+
+            return json.loads(
+                text
+            )
+
+        except Exception:
+
+            pass
+
+        # -----------------------------------------------------
+        # REMOVE MARKDOWN FENCES
+        # -----------------------------------------------------
+
+        cleaned = re.sub(
+            r"^```(?:json)?",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        cleaned = re.sub(
+            r"```$",
+            "",
+            cleaned
+        )
+
+        cleaned = cleaned.strip()
+
+        try:
+
+            return json.loads(
+                cleaned
+            )
+
+        except Exception:
+
+            pass
+
+        # -----------------------------------------------------
+        # FIND FIRST JSON OBJECT / ARRAY
+        # -----------------------------------------------------
+
+        start_positions = []
+
+        object_start = cleaned.find(
+            "{"
+        )
+
+        array_start = cleaned.find(
+            "["
+        )
+
+        if object_start >= 0:
+
+            start_positions.append(
+                object_start
+            )
+
+        if array_start >= 0:
+
+            start_positions.append(
+                array_start
+            )
+
+        if not start_positions:
+
+            return None
+
+        start = min(
+            start_positions
+        )
+
+        opening = cleaned[
+            start
+        ]
+
+        depth = 0
+
+        in_string = False
+
+        escaped = False
+
+        for index in range(
+            start,
+            len(cleaned)
+        ):
+
+            char = cleaned[
+                index
+            ]
+
+            # -------------------------------------------------
+            # ESCAPED CHARACTERS
+            # -------------------------------------------------
+
+            if escaped:
+
+                escaped = False
+
+                continue
+
+            if char == "\\" and in_string:
+
+                escaped = True
+
+                continue
+
+            # -------------------------------------------------
+            # STRING HANDLING
+            # -------------------------------------------------
+
+            if char == '"':
+
+                in_string = (
+                    not in_string
+                )
+
+                continue
+
+            if in_string:
+
+                continue
+
+            # -------------------------------------------------
+            # NESTED OBJECTS / ARRAYS
+            # -------------------------------------------------
+
+            if char in "{[":
+
+                depth += 1
+
+            elif char in "}]":
+
+                depth -= 1
+
+                if depth == 0:
+
+                    candidate = (
+                        cleaned[
+                            start:index + 1
+                        ]
+                    )
+
+                    try:
+
+                        return json.loads(
+                            candidate
+                        )
+
+                    except Exception:
+
+                        return None
+
+        return None
 
     # =========================================================
     # APPLY GEMINI FIX
@@ -971,14 +1305,17 @@ Return valid JSON only.
 
             relative_path = (
                 self._normalize_relative_path(
-                    fix_details["file_path"]
+                    fix_details[
+                        "file_path"
+                    ]
                 )
             )
 
             if not relative_path:
 
                 print(
-                    "[ERROR] Invalid file path."
+                    "[ERROR] Invalid "
+                    "file path."
                 )
 
                 return False
@@ -1013,7 +1350,7 @@ Return valid JSON only.
                 return False
 
             # -------------------------------------------------
-            # FILE MUST ALREADY EXIST
+            # FILE MUST EXIST
             # -------------------------------------------------
 
             if not target_path.exists():
@@ -1027,6 +1364,7 @@ Return valid JSON only.
                 return False
 
             if not target_path.is_file():
+
                 return False
 
             # -------------------------------------------------
@@ -1055,7 +1393,9 @@ Return valid JSON only.
             # -------------------------------------------------
 
             target_path.write_text(
-                fix_details["fixed_code"],
+                fix_details[
+                    "fixed_code"
+                ],
                 encoding="utf-8"
             )
 

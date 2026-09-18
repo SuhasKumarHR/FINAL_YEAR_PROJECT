@@ -18,49 +18,124 @@ def detect_project_language(repo_path: str) -> str:
     - JavaScript
     - TypeScript
     - Java
+
+    Also detects nested frontend projects such as:
+
+        repository/
+            backend/
+            frontend/
+                package.json
+                tsconfig.json
     """
 
     root = Path(repo_path)
 
-    # --------------------------------------------------
-    # Java detection
-    # --------------------------------------------------
+    # =========================================================
+    # JAVA
+    # =========================================================
+
     if (
         (root / "pom.xml").exists()
         or (root / "build.gradle").exists()
         or (root / "build.gradle.kts").exists()
-        or any(root.rglob("*.java"))
+        or any(
+            p.is_file()
+            for p in root.rglob("*.java")
+            if "node_modules" not in p.parts
+        )
     ):
         return "java"
 
-    # --------------------------------------------------
-    # TypeScript detection
-    # --------------------------------------------------
+    # =========================================================
+    # TYPEScript - ROOT PROJECT
+    # =========================================================
+
     if (
         (root / "tsconfig.json").exists()
-        or any(root.rglob("*.ts"))
-        or any(root.rglob("*.tsx"))
+        or (root / "package.json").exists()
+        and any(
+            p.is_file()
+            for p in root.rglob("*.ts")
+            if "node_modules" not in p.parts
+        )
+        or any(
+            p.is_file()
+            for p in root.rglob("*.tsx")
+            if "node_modules" not in p.parts
+        )
     ):
         return "typescript"
 
-    # --------------------------------------------------
-    # JavaScript detection
-    # --------------------------------------------------
+    # =========================================================
+    # NESTED NODE / NEXT.JS PROJECT
+    #
+    # Example:
+    #
+    # repository/
+    #     frontend/
+    #         package.json
+    #         next.config.ts
+    #         tsconfig.json
+    # =========================================================
+
+    for package_file in root.rglob("package.json"):
+
+        if "node_modules" in package_file.parts:
+            continue
+
+        package_root = package_file.parent
+
+        if (
+            (package_root / "tsconfig.json").exists()
+            or any(
+                p.is_file()
+                for p in package_root.rglob("*.ts")
+                if "node_modules" not in p.parts
+            )
+            or any(
+                p.is_file()
+                for p in package_root.rglob("*.tsx")
+                if "node_modules" not in p.parts
+            )
+        ):
+            return "typescript"
+
+    # =========================================================
+    # JAVASCRIPT
+    # =========================================================
+
     if (
         (root / "package.json").exists()
-        or any(root.rglob("*.js"))
-        or any(root.rglob("*.jsx"))
+        or any(
+            p.is_file()
+            for p in root.rglob("*.js")
+            if "node_modules" not in p.parts
+        )
+        or any(
+            p.is_file()
+            for p in root.rglob("*.jsx")
+            if "node_modules" not in p.parts
+        )
     ):
         return "javascript"
 
-    # --------------------------------------------------
-    # Python detection
-    # --------------------------------------------------
+    # =========================================================
+    # PYTHON
+    # =========================================================
+
     if (
         (root / "requirements.txt").exists()
         or (root / "pyproject.toml").exists()
         or (root / "setup.py").exists()
-        or any(root.rglob("*.py"))
+        or any(
+            p.is_file()
+            for p in root.rglob("*.py")
+            if (
+                "node_modules" not in p.parts
+                and ".venv" not in p.parts
+                and "venv" not in p.parts
+            )
+        )
     ):
         return "python"
 
@@ -73,6 +148,7 @@ def get_language_details(language: str) -> dict:
     """
 
     details = {
+
         "python": {
             "language": "Python",
             "extensions": [".py"],
@@ -83,7 +159,7 @@ def get_language_details(language: str) -> dict:
         "javascript": {
             "language": "JavaScript",
             "extensions": [".js", ".jsx"],
-            "command": "node",
+            "command": "npm",
             "check": "npm run build",
         },
 

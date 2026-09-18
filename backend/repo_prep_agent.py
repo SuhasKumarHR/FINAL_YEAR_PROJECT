@@ -117,10 +117,13 @@ class RepoPrepAgent:
 
             try:
                 shutil.rmtree(self.target_dir)
+
             except Exception as e:
+
                 print(
                     f"[ERROR] Unable to clean directory: {str(e)}"
                 )
+
                 return False
 
         try:
@@ -157,6 +160,79 @@ class RepoPrepAgent:
         return shutil.which(name) is not None
 
     # ---------------------------------------------------------
+    # FIND NODE PROJECT
+    # ---------------------------------------------------------
+
+    def _find_node_project(self):
+        """
+        Find the directory containing package.json.
+
+        Checks:
+        1. Repository root
+        2. frontend
+        3. client
+        4. web
+        5. app
+        6. Other nested directories
+
+        node_modules and build directories are ignored.
+        """
+
+        repo_path = Path(self.target_dir)
+
+        # -----------------------------------------------------
+        # Root package.json
+        # -----------------------------------------------------
+
+        root_package = repo_path / "package.json"
+
+        if root_package.exists():
+
+            return repo_path
+
+        # -----------------------------------------------------
+        # Preferred frontend directories
+        # -----------------------------------------------------
+
+        preferred_directories = [
+            "frontend",
+            "client",
+            "web",
+            "app"
+        ]
+
+        for directory in preferred_directories:
+
+            project_dir = repo_path / directory
+
+            if (
+                project_dir.is_dir()
+                and (project_dir / "package.json").exists()
+            ):
+
+                return project_dir
+
+        # -----------------------------------------------------
+        # Search remaining nested directories
+        # -----------------------------------------------------
+
+        for package_file in repo_path.rglob("package.json"):
+
+            parts = set(package_file.parts)
+
+            if (
+                "node_modules" in parts
+                or ".next" in parts
+                or "dist" in parts
+                or "build" in parts
+            ):
+                continue
+
+            return package_file.parent
+
+        return None
+
+    # ---------------------------------------------------------
     # SETUP ENVIRONMENT
     # ---------------------------------------------------------
 
@@ -169,6 +245,14 @@ class RepoPrepAgent:
         - JavaScript
         - TypeScript
         - Java
+
+        Also supports nested Node/TypeScript projects such as:
+
+            repository/
+                backend/
+                frontend/
+                    package.json
+                    tsconfig.json
         """
 
         repo_path = Path(self.target_dir)
@@ -265,7 +349,7 @@ class RepoPrepAgent:
                 )
 
                 print(
-                    f"[LOG] Detected simple Java project."
+                    "[LOG] Detected simple Java project."
                 )
 
                 print(
@@ -363,26 +447,44 @@ class RepoPrepAgent:
             or detected_language == "typescript"
         ):
 
-            # Formal Node project
-            if "package.json" in files:
+            # -------------------------------------------------
+            # FIND ROOT OR NESTED NODE PROJECT
+            # -------------------------------------------------
+
+            node_project = self._find_node_project()
+
+            if node_project:
+
+                print(
+                    f"[LOG] Node project found at: "
+                    f"{node_project}"
+                )
+
+                # ---------------------------------------------
+                # TypeScript
+                # ---------------------------------------------
 
                 if detected_language == "typescript":
 
                     print(
                         "[LOG] Detected TypeScript "
-                        "(package.json)."
+                        "project with package.json."
                     )
+
+                # ---------------------------------------------
+                # JavaScript
+                # ---------------------------------------------
 
                 else:
 
                     print(
                         "[LOG] Detected JavaScript "
-                        "(package.json)."
+                        "project with package.json."
                     )
 
-                # -------------------------------------------------
+                # ---------------------------------------------
                 # Bun
-                # -------------------------------------------------
+                # ---------------------------------------------
 
                 if self._is_tool_installed("bun"):
 
@@ -394,11 +496,18 @@ class RepoPrepAgent:
                         "[LOG] Running 'bun install'..."
                     )
 
-                    subprocess.run(
+                    result = subprocess.run(
                         ["bun", "install"],
-                        cwd=self.target_dir,
+                        cwd=str(node_project),
                         check=False
                     )
+
+                    if result.returncode != 0:
+
+                        print(
+                            "[WARN] Bun dependency installation "
+                            "returned an error."
+                        )
 
                     if detected_language == "typescript":
 
@@ -406,9 +515,9 @@ class RepoPrepAgent:
 
                     return "javascript (bun)"
 
-                # -------------------------------------------------
+                # ---------------------------------------------
                 # npm
-                # -------------------------------------------------
+                # ---------------------------------------------
 
                 else:
 
@@ -420,11 +529,18 @@ class RepoPrepAgent:
                         "[LOG] Running 'npm install'..."
                     )
 
-                    subprocess.run(
+                    result = subprocess.run(
                         ["npm", "install"],
-                        cwd=self.target_dir,
+                        cwd=str(node_project),
                         check=False
                     )
+
+                    if result.returncode != 0:
+
+                        print(
+                            "[WARN] npm dependency installation "
+                            "returned an error."
+                        )
 
                     if detected_language == "typescript":
 
@@ -432,9 +548,9 @@ class RepoPrepAgent:
 
                     return "javascript (npm)"
 
-            # -----------------------------------------------------
+            # -------------------------------------------------
             # Simple JS/TS project
-            # -----------------------------------------------------
+            # -------------------------------------------------
 
             else:
 

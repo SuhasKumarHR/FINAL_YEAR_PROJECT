@@ -18,7 +18,7 @@ from git_agent import GitAgent
 from failure_classifier import FailureClassifier
 
 
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "50"))
 
 
 def main():
