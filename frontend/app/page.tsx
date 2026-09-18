@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent, useRef, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { io, Socket } from "socket.io-client";
 import gsap from "gsap";
@@ -555,6 +556,13 @@ export default function Home() {
               </div>
             )}
 
+            <Link
+              className="hidden rounded-xl border border-cyan-400/25 bg-cyan-400/5 px-4 py-2 text-xs font-bold text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/10 sm:block"
+              href="/auth"
+            >
+              SIGN IN
+            </Link>
+
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-400/25 bg-cyan-400/5">
               <Settings className="h-4 w-4 text-cyan-300" />
             </div>
@@ -741,9 +749,8 @@ export default function Home() {
                       </span>
 
                       <ChevronDown
-                        className={`h-4 w-4 text-cyan-300 transition-transform ${
-                          showAdvanced ? "rotate-180" : ""
-                        }`}
+                        className={`h-4 w-4 text-cyan-300 transition-transform ${showAdvanced ? "rotate-180" : ""
+                          }`}
                       />
                     </button>
 
@@ -903,11 +910,10 @@ export default function Home() {
                     </div>
 
                     <div
-                      className={`rounded-full border px-4 py-2 text-xs font-black tracking-wider ${
-                        summary.status === "SUCCESS"
+                      className={`rounded-full border px-4 py-2 text-xs font-black tracking-wider ${summary.status === "SUCCESS"
                           ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
                           : "border-red-400/30 bg-red-400/10 text-red-300"
-                      }`}
+                        }`}
                     >
                       {summary.status === "SUCCESS"
                         ? "✓ PASSED"
@@ -922,7 +928,7 @@ export default function Home() {
                         "Failures",
                         String(
                           summary.total_failures ||
-                            summary.fixes.length,
+                          summary.fixes.length,
                         ),
                       ],
                       ["Fixes Applied", String(summary.fixes.length)],
@@ -1102,11 +1108,10 @@ export default function Home() {
 
                                 <td className="px-4 py-4 text-center">
                                   <span
-                                    className={`rounded-full px-3 py-1 text-[10px] font-bold ${
-                                      fixed
+                                    className={`rounded-full px-3 py-1 text-[10px] font-bold ${fixed
                                         ? "bg-emerald-400/10 text-emerald-300"
                                         : "bg-red-400/10 text-red-300"
-                                    }`}
+                                      }`}
                                   >
                                     {fixed ? "✓ Fixed" : "✗ Failed"}
                                   </span>
